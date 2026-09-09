@@ -96,6 +96,7 @@ import {
   type McpConnectionPolicy,
   type McpGroupPolicy,
   type ClickTableNavigationTarget,
+  type EditorSettings,
   type SqlCompletionTriggerMode,
   SIDEBAR_INDENT_MIN,
   SIDEBAR_INDENT_MAX,
@@ -130,10 +131,15 @@ import {
   forgetWebdavSyncSecretsPassphrase,
   forgetWebdavSavedPassword,
   getAppSupportInfo,
+  checkBackgroundImage,
+  clearBackgroundImage,
+  saveBackgroundImage,
   loadMaxAgentTurns,
   saveMaxAgentTurns,
   loadMaxRetries,
   saveMaxRetries,
+  loadSqlFileUploadMaxBytes,
+  saveSqlFileUploadMaxMb,
   saveWebdavSyncSecretsPreference,
   saveWebdavSavedPassword,
   saveSnippetSavedToken,
@@ -175,7 +181,7 @@ import { EMPTY_TABLE_COLUMN_TEMPLATE_DATA_TYPE, parseTableColumnTemplateFields, 
 import { DEFAULT_SQL_VARIABLE_SYNTAX_TOGGLES, normalizeSqlVariableSyntaxOverrides, SQL_VARIABLE_SYNTAX_DATABASE_TYPES, SQL_VARIABLE_SYNTAX_KEYS, SQL_VARIABLE_SYNTAX_TOKENS, type SqlVariableSyntaxOverrides, type SqlVariableSyntaxToggles } from "@/lib/sql/sqlVariableSyntax";
 import { buildMcpCherryStudioConfig, buildMcpCodexConfig, buildMcpDeepSeekHarnessConfig, buildMcpJsonConfig, buildMcpOpenCodeConfig, buildMcpPiConfig, buildMcpQoderConfig, buildMcpTraeConfig, buildMcpVsCodeConfig, mcpWebBackendUrl, type McpLaunchConfig } from "@/lib/mcp/mcpConfigTemplates";
 import { beginMcpStatusRequest, mcpUpdateAvailability } from "@/lib/mcp/mcpUpdateStatus";
-import { isMcpPolicyMutationBlocked, MCP_CAPABILITY_ROWS, MCP_EXECUTION_MODE_COLUMNS, mcpExecutionModeFromPolicy, mcpPolicyFieldsForExecutionMode, type McpExecutionMode } from "@/lib/mcp/mcpPolicySelection";
+import { isMcpPolicyMutationBlocked, MCP_CAPABILITY_ROWS, MCP_EXECUTION_MODE_COLUMNS, MCP_TOOL_OPTIONS, mcpExecutionModeFromPolicy, mcpPolicyFieldsForExecutionMode, toggleMcpAllowedToolName, type McpExecutionMode } from "@/lib/mcp/mcpPolicySelection";
 import { isMacOS, isWindows } from "@/lib/backend/platform";
 import { combineDataTypeForDatabase, dataTypeLengthInputValue, getDataTypeOptions, getDefaultLengthForType, isDataTypeLengthDisabled, splitDataType } from "@/lib/table/tableStructureEditorState";
 import { useToast } from "@/composables/useToast";
@@ -186,28 +192,55 @@ import { DEFAULT_SQL_SNIPPETS } from "@/lib/sql/sqlCompletion";
 import AiProviderLogo from "@/components/icons/AiProviderLogo.vue";
 import AppLogo from "@/components/icons/AppLogo.vue";
 import ChangelogPanel from "@/components/settings/ChangelogPanel.vue";
+import SettingsTransferPanel from "@/components/settings/SettingsTransferPanel.vue";
 import McpResourceScopePicker from "@/components/settings/McpResourceScopePicker.vue";
 import McpDatabaseScopePicker from "@/components/settings/McpDatabaseScopePicker.vue";
 import McpAuthorizationStepper from "@/components/settings/McpAuthorizationStepper.vue";
 import ScheduledDatabaseBackupSettings from "@/components/backup/ScheduledDatabaseBackupSettings.vue";
 import SqlFormatterSettingsPanel from "./SqlFormatterSettingsPanel.vue";
 import { APP_CUSTOM_UI_COLOR_DEFS, APP_THEME_PALETTES, type AppCornerStyle, type AppCustomUiColors, type AppThemeAppearance, type AppThemeMode, type AppThemePalette } from "@/lib/app/appTheme";
-import { editorSettingsDraftChanged, editorSettingsDraftFromSettings, editorSettingsPatchFromDraft, normalizeQueryResultMaxRowsDraft, normalizeTableOpenPageSizeDraft, shouldConfirmEditorSettingsDialogClose, type EditorSettingsDraft } from "@/lib/settings/editorSettingsDraft";
+import { BACKGROUND_IMAGE_DISPLAY_MODES, BACKGROUND_IMAGE_STORAGE_LIMIT_BYTES, defaultBackgroundImageSettings, normalizeBackgroundImageDisplayMode, type BackgroundImageSettings } from "@/lib/app/appBackgroundImage";
+import {
+  editorSettingsDraftChanged,
+  editorSettingsDraftFromSettings,
+  editorSettingsDraftPatchFromSettings,
+  editorSettingsPatchFromDraft,
+  normalizeQueryResultMaxRowsDraft,
+  normalizeTableOpenPageSizeDraft,
+  shouldConfirmEditorSettingsDialogClose,
+  type EditorSettingsDraft,
+  type EditorSettingsDraftKey,
+} from "@/lib/settings/editorSettingsDraft";
+import { applyEditorSettingsDraftToRefs, type EditorSettingsDraftRefMap } from "@/lib/settings/applyEditorSettingsDraft";
+import { serializeSettingsTransfer, sortTransferCategories, transferCategoryForKey, type SettingsTransferCategoryId } from "@/lib/settings/settingsTransfer";
 import { useConnectionStore } from "@/stores/connectionStore";
 import { useSavedSqlStore } from "@/stores/savedSqlStore";
 import { usePromptTemplateStore } from "@/stores/promptTemplateStore";
 import { useTunnelProfileStore } from "@/stores/tunnelProfileStore";
-import { currentLocale, setLocale, type Locale } from "@/i18n";
-import { SETTINGS_SEARCH_DEFINITIONS, TOOLBAR_VISIBILITY_ITEMS, createShortcutSettingsSearchDefinitions, resolveSettingsSearchEntries, searchSettings, toolbarVisibilityItemLabel, type SettingsCategory, type SettingsSearchEntry, type ToolbarVisibilityItem } from "@/lib/settings/settingsSearch";
+import { currentLocale, previewLocale, restoreLocalePreview, setLocale, type Locale } from "@/i18n";
+import {
+  SETTINGS_SEARCH_DEFINITIONS,
+  TOOLBAR_VISIBILITY_ITEMS,
+  createShortcutSettingsSearchDefinitions,
+  resolveSettingsCategory,
+  resolveSettingsSearchEntries,
+  searchSettings,
+  toolbarVisibilityItemLabel,
+  type SettingsCategory,
+  type SettingsSearchEntry,
+  type ToolbarVisibilityItem,
+} from "@/lib/settings/settingsSearch";
 import { LOCALE_OPTIONS } from "@/lib/app/localeOptions";
 import { DEFAULT_WEB_DAV_AUTO_UPLOAD_INTERVAL_MINUTES, DEFAULT_WEB_DAV_REMOTE_PATH, normalizedWebDavAutoUploadInterval, writeWebDavAutoUploadFields } from "@/lib/webdav/webdavAutoUploadConfig";
 import { apiUrl, webPath } from "@/lib/common/webPath";
 import { DEFAULT_DATA_GRID_FONT_FAMILY, DEFAULT_UI_FONT_FAMILY, normalizeCustomFontFamilyInput, readableFontFamily, SYSTEM_UI_FONT_FAMILY } from "@/lib/app/appFonts";
 import { buildFontFamilyOptions, displayFontFamily, isPresetFontFamily, loadSystemFontNames } from "@/lib/app/fontFamilyOptions";
 import { buildAppSupportInfoRows, formatAppSupportInfoForClipboard, type AppSupportInfoLabels } from "@/lib/app/supportInfo";
+import { useUiFontFamilyPreview } from "@/composables/useUiFontFamilyPreview";
 import { DateTimePatterns, normalizeSupportedDateTimePattern } from "@/lib/dataGrid/columnFormatter";
 import { MAX_RESULT_PAGE_SIZE, MIN_RESULT_PAGE_SIZE } from "@/lib/dataGrid/paginationPageSize";
 import { MAX_QUERY_RESULT_MAX_ROWS } from "@/lib/dataGrid/queryResultRowLimit";
+import { MAX_EXTERNAL_SQL_EDITOR_FILE_MB, MIN_EXTERNAL_SQL_EDITOR_FILE_MB, clampExternalSqlEditorMaxMbInput } from "@/lib/sql/sqlFileOpen";
 import type { PromptTemplate } from "@/types/promptTemplate";
 import { GLOBAL_INSTRUCTIONS_MAX, PROMPT_TEMPLATE_CONTENT_MAX, PROMPT_TEMPLATE_NAME_MAX, promptTemplateCharacterCount } from "@/types/promptTemplate";
 import { METADATA_CACHE_HARD_MAX_MEMORY_MB, METADATA_CACHE_MIN_MEMORY_MB, normalizeMetadataCacheMemoryMb } from "@/lib/metadata/metadataRuntimeCache";
@@ -221,10 +254,47 @@ const connectionStore = useConnectionStore();
 const savedSqlStore = useSavedSqlStore();
 const promptTemplateStore = usePromptTemplateStore();
 const tunnelProfileStore = useTunnelProfileStore();
-const { isDark, themeMode, themePalette, activeCustomUiColors, cornerStyle, setThemeMode, setThemePalette, setCustomUiColors, resetCustomUiColors, setCornerStyle } = useTheme();
+const { isDark, themeMode, themePalette, activeCustomUiColors, cornerStyle, setThemeMode, setThemePalette, previewThemePalette, clearThemePalettePreview, setCustomUiColors, resetCustomUiColors, setCornerStyle } = useTheme();
+const { previewUiFontFamily, clearUiFontFamilyPreview } = useUiFontFamilyPreview();
 
 function updateCustomUiColor(key: keyof AppCustomUiColors, value: string) {
   setCustomUiColors({ ...activeCustomUiColors.value, [key]: value });
+}
+
+function onThemePaletteSelect(value: unknown) {
+  if (typeof value === "string") setThemePalette(value as AppThemePalette);
+}
+
+function onThemePaletteOpenChange(open: boolean) {
+  if (!open) clearThemePalettePreview();
+}
+
+function previewUiFontOption(value: string | undefined) {
+  if (value) previewUiFontFamily(value);
+}
+
+function restoreUiFontFamilyPreview() {
+  previewUiFontFamily(editUiFontFamily.value);
+}
+
+function onUiFontFamilyOpenChange(open: boolean) {
+  if (open) {
+    void loadSystemFontOptions();
+  } else {
+    restoreUiFontFamilyPreview();
+  }
+}
+
+function previewLocaleOption(locale: Locale) {
+  void previewLocale(locale);
+}
+
+function restoreLocaleOptionPreview() {
+  void restoreLocalePreview();
+}
+
+function onLocaleOpenChange(open: boolean) {
+  if (!open) restoreLocaleOptionPreview();
 }
 
 const appThemePaletteOptions = computed(
@@ -381,6 +451,12 @@ const editTableFontFamily = ref(settingsStore.editorSettings.tableFontFamily);
 const editUiFontFamily = ref(settingsStore.editorSettings.uiFontFamily);
 const editUiScale = ref(settingsStore.editorSettings.uiScale);
 const editTheme = ref(settingsStore.editorSettings.theme);
+const editBackgroundImage = ref<BackgroundImageSettings>(cloneBackgroundImageDraft(settingsStore.editorSettings.backgroundImage));
+const backgroundImageTransparencyPercent = computed(() => Math.round((1 - editBackgroundImage.value.opacity) * 100));
+const backgroundImageFileMissing = ref(false);
+// Set when the draft clears a configured image; the stored copy is only
+// deleted once the change is actually applied.
+let pendingBackgroundImageCleanup: string | null = null;
 const editCustomThemes = ref<CustomTheme[]>([...settingsStore.editorSettings.customThemes]);
 const editActiveCustomThemeId = ref(settingsStore.editorSettings.activeCustomThemeId);
 const editDataGridTypeColorSchemes = ref<DataGridTypeColorScheme[]>(cloneDataGridTypeColorSchemes(settingsStore.editorSettings.dataGridTypeColorSchemes));
@@ -452,6 +528,7 @@ const editShowIndexIndicatorsInHeader = ref(settingsStore.editorSettings.showInd
 const editCompactColumnHeaderActions = ref(settingsStore.editorSettings.compactColumnHeaderActions);
 const editDataGridQuickEntry = ref(settingsStore.editorSettings.dataGridQuickEntry);
 const editDataGridFilterEditorView = ref<DataGridFilterEditorView>(settingsStore.editorSettings.dataGridFilterEditorView);
+const editDataGridKeepFilterEditorExpanded = ref(settingsStore.editorSettings.dataGridKeepFilterEditorExpanded);
 const dataGridFilterViewPreviewExpanded = ref(true);
 const editDataGridTextFilterPanelHeight = ref(settingsStore.editorSettings.dataGridTextFilterPanelHeight);
 const editMultiStatementDefaultView = ref<MultiStatementDefaultView>(settingsStore.editorSettings.multiStatementDefaultView);
@@ -462,6 +539,7 @@ const editPageSize = ref(settingsStore.editorSettings.pageSize);
 const editTableOpenPageSize = ref(settingsStore.editorSettings.tableOpenPageSize);
 const editQueryResultMaxRowsEnabled = ref(settingsStore.editorSettings.queryResultMaxRowsEnabled);
 const editQueryResultMaxRows = ref(settingsStore.editorSettings.queryResultMaxRows);
+const editExternalSqlEditorMaxMb = ref(settingsStore.editorSettings.externalSqlEditorMaxMb);
 const editInfiniteScroll = ref(settingsStore.editorSettings.infiniteScroll);
 const editRegexMaxMatchCount = ref(settingsStore.editorSettings.regexMaxMatchCount);
 const editAutoCalculateTotalRows = ref(settingsStore.editorSettings.autoCalculateTotalRows);
@@ -490,6 +568,18 @@ function updateQueryResultMaxRowsInput(event: Event) {
   const normalized = normalizeQueryResultMaxRowsDraft(input.value);
   if (input.value !== String(normalized)) input.value = String(normalized);
   editQueryResultMaxRows.value = normalized;
+}
+
+function updateExternalSqlEditorMaxMbInput(event: Event) {
+  const input = event.currentTarget as HTMLInputElement;
+  const parsed = Number(input.value);
+  if (!Number.isFinite(parsed) || parsed > MAX_EXTERNAL_SQL_EDITOR_FILE_MB) {
+    input.value = String(editExternalSqlEditorMaxMb.value);
+    return;
+  }
+  const normalized = clampExternalSqlEditorMaxMbInput(input.value);
+  if (input.value !== String(normalized)) input.value = String(normalized);
+  editExternalSqlEditorMaxMb.value = normalized;
 }
 
 function sqlVariableSyntaxToggle(key: keyof SqlVariableSyntaxToggles): boolean {
@@ -624,6 +714,7 @@ function currentEditorSettingsDraft(): EditorSettingsDraft {
     uiFontFamily: editUiFontFamily.value,
     uiScale: editUiScale.value,
     theme: editTheme.value,
+    backgroundImage: editBackgroundImage.value,
     customThemes: editCustomThemes.value,
     activeCustomThemeId: editActiveCustomThemeId.value,
     executeMode: editExecuteMode.value,
@@ -663,6 +754,7 @@ function currentEditorSettingsDraft(): EditorSettingsDraft {
     compactColumnHeaderActions: editCompactColumnHeaderActions.value,
     dataGridQuickEntry: editDataGridQuickEntry.value,
     dataGridFilterEditorView: editDataGridFilterEditorView.value,
+    dataGridKeepFilterEditorExpanded: editDataGridKeepFilterEditorExpanded.value,
     dataGridTextFilterPanelHeight: editDataGridTextFilterPanelHeight.value,
     multiStatementDefaultView: editMultiStatementDefaultView.value,
     dataGridAutoTransposeSingleRow: editDataGridAutoTransposeSingleRow.value,
@@ -673,6 +765,7 @@ function currentEditorSettingsDraft(): EditorSettingsDraft {
     tableOpenPageSize: editTableOpenPageSize.value,
     queryResultMaxRowsEnabled: editQueryResultMaxRowsEnabled.value,
     queryResultMaxRows: editQueryResultMaxRows.value,
+    externalSqlEditorMaxMb: editExternalSqlEditorMaxMb.value,
     infiniteScroll: editInfiniteScroll.value,
     regexMaxMatchCount: editRegexMaxMatchCount.value,
     autoCalculateTotalRows: editAutoCalculateTotalRows.value,
@@ -724,6 +817,86 @@ function currentEditorSettingsDraft(): EditorSettingsDraft {
 
 const editEditorSettingsBase = ref<EditorSettingsDraft>(editorSettingsDraftFromSettings(settingsStore.editorSettings));
 const hasEditorDraftChanges = computed(() => editorSettingsDraftChanged(currentEditorSettingsDraft(), editEditorSettingsBase.value));
+
+// --- Background image draft state ---
+function cloneBackgroundImageDraft(settings: BackgroundImageSettings): BackgroundImageSettings {
+  return JSON.parse(JSON.stringify(settings)) as BackgroundImageSettings;
+}
+
+async function checkBackgroundImageFileExists() {
+  const filePath = editBackgroundImage.value.filePath;
+  if (!filePath) {
+    backgroundImageFileMissing.value = false;
+    return;
+  }
+  try {
+    backgroundImageFileMissing.value = !(await checkBackgroundImage(filePath));
+  } catch {
+    backgroundImageFileMissing.value = true;
+  }
+}
+
+async function pickBackgroundImage() {
+  try {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const selected = await open({
+      multiple: false,
+      filters: [{ name: t("settings.backgroundImageFilterName"), extensions: ["png", "jpg", "jpeg", "webp", "bmp", "gif"] }],
+    });
+    if (Array.isArray(selected) || typeof selected !== "string" || !selected) return;
+    try {
+      const { stat } = await import("@tauri-apps/plugin-fs");
+      const metadata = await stat(selected);
+      if (metadata.size > BACKGROUND_IMAGE_STORAGE_LIMIT_BYTES) {
+        toast(t("settings.backgroundImageTooLarge"), 4000);
+        return;
+      }
+    } catch {
+      // The Rust command re-validates; keep going so it can produce the error.
+    }
+    const info = await saveBackgroundImage(selected);
+    editBackgroundImage.value = {
+      ...defaultBackgroundImageSettings(),
+      opacity: editBackgroundImage.value.opacity,
+      blur: editBackgroundImage.value.blur,
+      displayMode: editBackgroundImage.value.displayMode,
+      filePath: info.storedPath,
+      fileName: info.fileName,
+    };
+    backgroundImageFileMissing.value = false;
+  } catch (error) {
+    // Surface every failure (missing command in a stale binary, fs scope, copy
+    // errors): Tauri rejections are plain strings, so String() keeps the detail.
+    console.error("[dbx] background image selection failed", error);
+    toast(`${t("settings.backgroundImageSaveFailed")}: ${error instanceof Error ? error.message : String(error)}`, 6000);
+  }
+}
+
+function clearBackgroundImageDraft() {
+  const previousPath = editBackgroundImage.value.filePath;
+  editBackgroundImage.value = {
+    ...defaultBackgroundImageSettings(),
+    opacity: editBackgroundImage.value.opacity,
+    blur: editBackgroundImage.value.blur,
+    displayMode: editBackgroundImage.value.displayMode,
+  };
+  backgroundImageFileMissing.value = false;
+  if (previousPath) pendingBackgroundImageCleanup = previousPath;
+}
+
+function updateBackgroundImageDisplayMode(mode: unknown) {
+  editBackgroundImage.value = { ...editBackgroundImage.value, displayMode: normalizeBackgroundImageDisplayMode(mode) };
+}
+
+// Slider shows surface transparency (100% = wallpaper most visible); the stored
+// field stays surface opacity, so the value is inverted on the way in/out.
+function updateBackgroundImageTransparency(transparencyPercent: number) {
+  editBackgroundImage.value = { ...editBackgroundImage.value, opacity: Math.min(1, Math.max(0.05, 1 - transparencyPercent / 100)) };
+}
+
+function updateBackgroundImageBlur(value: number) {
+  editBackgroundImage.value = { ...editBackgroundImage.value, blur: Math.min(20, Math.max(0, Math.round(value))) };
+}
 
 const snippetDialogOpen = ref(false);
 const snippetEditingId = ref<string | null>(null);
@@ -1020,6 +1193,15 @@ async function loadSystemFontOptions() {
   }
 }
 
+// An import always leaves the loaded draft pending an explicit Apply, even
+// when every imported value happens to equal the saved settings — without this
+// the footer Apply / Apply & Close buttons stay disabled right after "载入设置"
+// and the "请应用以保存" toast points at a disabled button.
+// Declared before syncEditorSettingsDraftFromStore because the immediate
+// settingsVisible watch calls it during setup (a later declaration would be
+// hit in its temporal dead zone and crash the settings page on open).
+const hasImportedSettingsPendingApply = ref(false);
+
 function syncEditorSettingsDraftFromStore() {
   editFontFamily.value = settingsStore.editorSettings.fontFamily;
   editFontSize.value = settingsStore.editorSettings.fontSize;
@@ -1027,6 +1209,8 @@ function syncEditorSettingsDraftFromStore() {
   editUiFontFamily.value = settingsStore.editorSettings.uiFontFamily;
   editUiScale.value = settingsStore.editorSettings.uiScale;
   editTheme.value = settingsStore.editorSettings.theme;
+  editBackgroundImage.value = cloneBackgroundImageDraft(settingsStore.editorSettings.backgroundImage);
+  pendingBackgroundImageCleanup = null;
   editCustomThemes.value = [...settingsStore.editorSettings.customThemes];
   editActiveCustomThemeId.value = settingsStore.editorSettings.activeCustomThemeId;
   editExecuteMode.value = settingsStore.editorSettings.executeMode;
@@ -1067,6 +1251,7 @@ function syncEditorSettingsDraftFromStore() {
   editCompactColumnHeaderActions.value = settingsStore.editorSettings.compactColumnHeaderActions;
   editDataGridQuickEntry.value = settingsStore.editorSettings.dataGridQuickEntry;
   editDataGridFilterEditorView.value = settingsStore.editorSettings.dataGridFilterEditorView;
+  editDataGridKeepFilterEditorExpanded.value = settingsStore.editorSettings.dataGridKeepFilterEditorExpanded;
   editDataGridTextFilterPanelHeight.value = settingsStore.editorSettings.dataGridTextFilterPanelHeight;
   editMultiStatementDefaultView.value = settingsStore.editorSettings.multiStatementDefaultView;
   editDataGridAutoTransposeSingleRow.value = settingsStore.editorSettings.dataGridAutoTransposeSingleRow;
@@ -1077,6 +1262,7 @@ function syncEditorSettingsDraftFromStore() {
   editTableOpenPageSize.value = settingsStore.editorSettings.tableOpenPageSize;
   editQueryResultMaxRowsEnabled.value = settingsStore.editorSettings.queryResultMaxRowsEnabled;
   editQueryResultMaxRows.value = settingsStore.editorSettings.queryResultMaxRows;
+  editExternalSqlEditorMaxMb.value = settingsStore.editorSettings.externalSqlEditorMaxMb;
   editInfiniteScroll.value = settingsStore.editorSettings.infiniteScroll;
   editRegexMaxMatchCount.value = settingsStore.editorSettings.regexMaxMatchCount;
   editAutoCalculateTotalRows.value = settingsStore.editorSettings.autoCalculateTotalRows;
@@ -1126,8 +1312,143 @@ function syncEditorSettingsDraftFromStore() {
   editSqlVariableSyntaxOverrides.value = normalizeSqlVariableSyntaxOverrides(settingsStore.editorSettings.sqlVariableSyntaxOverrides);
   editClickTableNavigationTarget.value = settingsStore.editorSettings.clickTableNavigationTarget;
   editEditorSettingsBase.value = editorSettingsDraftFromSettings(settingsStore.editorSettings);
+  hasImportedSettingsPendingApply.value = false;
 }
 
+// Mirror of syncEditorSettingsDraftFromStore for loading draft values into
+// the edit refs. Draft values are already settings-shaped and normalized, so
+// this only performs the ref-specific representations (joined textarea
+// strings, grid rows, editable snippet copies). Accepts a key subset so a
+// partial update (settings import) writes exactly the listed refs and leaves
+// every other in-progress edit untouched. The base snapshot is intentionally
+// left untouched: changed values stay unapplied until the user clicks Apply,
+// exactly like hand-edited draft values.
+const editorSettingsDraftRefs: EditorSettingsDraftRefMap = {
+  fontFamily: editFontFamily,
+  fontSize: editFontSize,
+  tableFontFamily: editTableFontFamily,
+  uiFontFamily: editUiFontFamily,
+  uiScale: editUiScale,
+  theme: editTheme,
+  backgroundImage: editBackgroundImage,
+  customThemes: editCustomThemes,
+  activeCustomThemeId: editActiveCustomThemeId,
+  executeMode: editExecuteMode,
+  executeAllOnBlankLine: editExecuteAllOnBlankLine,
+  showExecutionTargetPicker: editShowExecutionTargetPicker,
+  showStatementRunButtons: editShowStatementRunButtons,
+  showLineNumbers: editShowLineNumbers,
+  showCurrentStatementFrame: editShowCurrentStatementFrame,
+  showInsertValueHints: editShowInsertValueHints,
+  autoAliasTables: editAutoAliasTables,
+  insertSpaceAfterCompletion: editInsertSpaceAfterCompletion,
+  sortCompletionColumnsAlphabetically: editSortCompletionColumnsAlphabetically,
+  selectFirstCompletionOnOpen: editSelectFirstCompletionOnOpen,
+  wordWrap: editWordWrap,
+  vimModeEnabled: editVimModeEnabled,
+  autoCloseBrackets: editAutoCloseBrackets,
+  sqlSemanticDiagnosticsMode: editSqlSemanticDiagnosticsMode,
+  confirmDangerousSqlExecution: editConfirmDangerousSqlExecution,
+  confirmUnsavedSqlClose: editConfirmUnsavedSqlClose,
+  appCloseUnsavedTabsMode: editAppCloseUnsavedTabsMode,
+  savedSqlOpenTargetMode: editSavedSqlOpenTargetMode,
+  appLayout: editAppLayout,
+  tabLayout: editTabLayout,
+  tabPlacement: editTabPlacement,
+  tabGroupMode: editTabGroupMode,
+  tabSortMode: editTabSortMode,
+  showColumnCommentsInHeader: editShowColumnCommentsInHeader,
+  showColumnTypesInHeader: editShowColumnTypesInHeader,
+  dataGridShowTransposeFieldMetadata: editDataGridShowTransposeFieldMetadata,
+  colorizeDataGridCellTypes: editColorizeDataGridCellTypes,
+  dataGridTypeColorSchemes: editDataGridTypeColorSchemes,
+  activeDataGridTypeColorSchemeId: editActiveDataGridTypeColorSchemeId,
+  showIndexIndicatorsInHeader: editShowIndexIndicatorsInHeader,
+  compactColumnHeaderActions: editCompactColumnHeaderActions,
+  dataGridQuickEntry: editDataGridQuickEntry,
+  dataGridFilterEditorView: editDataGridFilterEditorView,
+  dataGridKeepFilterEditorExpanded: editDataGridKeepFilterEditorExpanded,
+  dataGridTextFilterPanelHeight: editDataGridTextFilterPanelHeight,
+  multiStatementDefaultView: editMultiStatementDefaultView,
+  dataGridAutoTransposeSingleRow: editDataGridAutoTransposeSingleRow,
+  dataGridCellDetailButtonVisible: editDataGridCellDetailButtonVisible,
+  dataGridCrosshairHighlight: editDataGridCrosshairHighlight,
+  pageSize: editPageSize,
+  tableOpenPageSize: editTableOpenPageSize,
+  queryResultMaxRowsEnabled: editQueryResultMaxRowsEnabled,
+  queryResultMaxRows: editQueryResultMaxRows,
+  externalSqlEditorMaxMb: editExternalSqlEditorMaxMb,
+  infiniteScroll: editInfiniteScroll,
+  regexMaxMatchCount: editRegexMaxMatchCount,
+  autoCalculateTotalRows: editAutoCalculateTotalRows,
+  flatteningMultiLineText: editFlatteningMultiLineText,
+  shortcuts: editShortcuts,
+  sqlFormatter: editSqlFormatter,
+  sidebarActivation: editSidebarActivation,
+  sidebarObjectDisplay: editSidebarObjectDisplay,
+  routineSourceOpenMode: editRoutineSourceOpenMode,
+  sidebarTableSearchEnabled: editSidebarTableSearchEnabled,
+  autoSelectActiveSidebarNode: editAutoSelectActiveSidebarNode,
+  sidebarBrowseObjectsOnDatabaseActivation: editSidebarBrowseObjectsOnDatabaseActivation,
+  openTabsRestoreMode: editOpenTabsRestoreMode,
+  disconnectTabHandlingMode: editDisconnectTabHandlingMode,
+  dataTabReuseMode: editDataTabReuseMode,
+  openDataTabsNextToActive: editOpenDataTabsNextToActive,
+  prefillNewQueryWithSelect: editPrefillNewQueryWithSelect,
+  generateSqlIncludeDatabaseName: editGenerateSqlIncludeDatabaseName,
+  generateSqlQuoteIdentifiers: editGenerateSqlQuoteIdentifiers,
+  formatSqlOnSqlFileSave: editFormatSqlOnSqlFileSave,
+  showTableDdlHoverPreview: editShowTableDdlHoverPreview,
+  updateNotificationsEnabled: editUpdateNotificationsEnabled,
+  sidebarObjectInfoMode: editSidebarObjectInfoMode,
+  sidebarAllowHorizontalScroll: editSidebarAllowHorizontalScroll,
+  sidebarShowTooltips: editSidebarShowTooltips,
+  sidebarIndent: editSidebarIndent,
+  sidebarFontSize: editSidebarFontSize,
+  sidebarHiddenTablePrefixes: editSidebarHiddenTablePrefixes,
+  sidebarCopyTableNameSeparator: editSidebarCopyTableNameSeparator,
+  sidebarCopyTableNameIncludeSchema: editSidebarCopyTableNameIncludeSchema,
+  redisKeyTemplates: editRedisKeyTemplates,
+  exportBatchSize: editExportBatchSize,
+  csvQuoteMode: editCsvQuoteMode,
+  exportRowLimitEnabled: editExportRowLimitEnabled,
+  exportRowLimit: editExportRowLimit,
+  queryExportKeysetOptimizationEnabled: editQueryExportKeysetOptimizationEnabled,
+  globalDateTimeDisplayFormat: editGlobalDateTimeDisplayFormat,
+  globalDateTimeExportFormat: editGlobalDateTimeExportFormat,
+  globalDateTimeImportFormat: editGlobalDateTimeImportFormat,
+  updateDownloadSource: editUpdateDownloadSource,
+  toolbarItems: editToolbarItems,
+  snippets: editSnippets,
+  sqlShortcuts: editSqlShortcuts,
+  sqlVariableSubstitutionEnabled: editSqlVariableSubstitutionEnabled,
+  sqlVariableSyntaxOverrides: editSqlVariableSyntaxOverrides,
+  continueOnErrorOnBatch: editContinueOnErrorOnBatch,
+  clickTableNavigationTarget: editClickTableNavigationTarget,
+  completionTriggerMode: editCompletionTriggerMode,
+  defaultTransactionMode: editDefaultTransactionMode,
+  tableColumnTemplateFields: editTableColumnTemplateRows,
+};
+
+function applyEditorSettingsKeysToRefs(draft: EditorSettingsDraft, keys: readonly EditorSettingsDraftKey[]) {
+  applyEditorSettingsDraftToRefs(draft, keys, editorSettingsDraftRefs, {
+    customThemes: (value) => [...(value as CustomTheme[])],
+    dataGridTypeColorSchemes: (value) => cloneDataGridTypeColorSchemes(value as DataGridTypeColorScheme[]),
+    tableColumnTemplateFields: (value) => tableColumnTemplateRowsFromSettings(value as string[]),
+    shortcuts: (value) => normalizeShortcutSettings(value as Parameters<typeof normalizeShortcutSettings>[0]),
+    sqlFormatter: (value) => normalizeSqlFormatterSettings(value as SqlFormatterSettings),
+    sidebarHiddenTablePrefixes: (value) => (value as string[]).join("\n"),
+    redisKeyTemplates: (value) => normalizeRedisKeyTemplates(value as string[]).join("\n"),
+    toolbarItems: (value) => ({ ...(value as EditorSettings["toolbarItems"]) }),
+    snippets: (value) => (value as SqlSnippet[]).map(editableSnippet),
+    sqlShortcuts: (value) => (value as SqlShortcutAction[]).map(editableSqlShortcut),
+    sqlVariableSyntaxOverrides: (value) => normalizeSqlVariableSyntaxOverrides(value as EditorSettings["sqlVariableSyntaxOverrides"]),
+    backgroundImage: (value) => cloneBackgroundImageDraft(value as BackgroundImageSettings),
+  });
+  if (keys.includes("sqlSemanticDiagnosticsMode")) {
+    editSqlSemanticDiagnosticsEnabled.value = editSqlSemanticDiagnosticsMode.value !== "disabled";
+  }
+}
 // Sync from store when dialog opens
 watch(
   () => settingsVisible.value,
@@ -1141,6 +1462,22 @@ watch(
       editMetadataCacheMaxMemoryMb.value = settingsStore.desktopSettings.metadata_cache_max_memory_mb;
       editDuckDbWorkerProcessIsolation.value = settingsStore.desktopSettings.duckdb_worker_process_isolation;
       editSidebarTablePageSize.value = settingsStore.desktopSettings.sidebar_table_page_size ?? DEFAULT_SIDEBAR_TABLE_PAGE_SIZE;
+    } else {
+      clearThemePalettePreview();
+      clearUiFontFamilyPreview();
+      restoreLocaleOptionPreview();
+    }
+  },
+  { immediate: true },
+);
+
+watch(
+  () => settingsStore.settingsPageActive,
+  (active) => {
+    if (isSettingsPage.value && !active) {
+      clearThemePalettePreview();
+      clearUiFontFamilyPreview();
+      restoreLocaleOptionPreview();
     }
   },
   { immediate: true },
@@ -1214,6 +1551,7 @@ const hasApplyBlocker = computed(() => hasBlockingShortcutConflicts.value || has
 
 function hasChanges(): boolean {
   return (
+    hasImportedSettingsPendingApply.value ||
     hasEditorDraftChanges.value ||
     editShowTrayIcon.value !== settingsStore.desktopSettings.show_tray_icon ||
     editQuitOnClose.value !== settingsStore.desktopSettings.quit_on_close ||
@@ -1236,6 +1574,11 @@ async function persistSettings() {
     await settingsStore.persistEditorSettings();
     editEditorSettingsBase.value = editorSettingsDraftFromSettings(settingsStore.editorSettings);
   }
+  if (pendingBackgroundImageCleanup) {
+    const cleanupPath = pendingBackgroundImageCleanup;
+    pendingBackgroundImageCleanup = null;
+    void clearBackgroundImage(cleanupPath).catch(() => {});
+  }
   const metadataCacheMaxMemoryMb = normalizeMetadataCacheMemoryMb(editMetadataCacheMaxMemoryMb.value);
   await settingsStore.updateDesktopSettings({
     show_tray_icon: editShowTrayIcon.value,
@@ -1250,6 +1593,7 @@ async function persistSettings() {
   });
   editMetadataCacheMaxMemoryMb.value = settingsStore.desktopSettings.metadata_cache_max_memory_mb;
   desktopCloseBehaviorResetPending.value = false;
+  hasImportedSettingsPendingApply.value = false;
   if (sidebarObjectDisplayChanged) {
     await connectionStore.refreshAllTree();
   } else if (sidebarTablePageSizeChanged) {
@@ -1329,6 +1673,7 @@ function resetDefaultsForTab(tab: SettingsCategory) {
     editAppCloseUnsavedTabsMode.value = DEFAULT_EDITOR_SETTINGS.appCloseUnsavedTabsMode;
     editSavedSqlOpenTargetMode.value = DEFAULT_EDITOR_SETTINGS.savedSqlOpenTargetMode;
     editShowTableDdlHoverPreview.value = DEFAULT_EDITOR_SETTINGS.showTableDdlHoverPreview;
+    editExternalSqlEditorMaxMb.value = DEFAULT_EDITOR_SETTINGS.externalSqlEditorMaxMb;
     editClickTableNavigationTarget.value = DEFAULT_EDITOR_SETTINGS.clickTableNavigationTarget;
     editSqlVariableSubstitutionEnabled.value = DEFAULT_EDITOR_SETTINGS.sqlVariableSubstitutionEnabled;
     editSqlVariableSyntaxOverrides.value = normalizeSqlVariableSyntaxOverrides(DEFAULT_EDITOR_SETTINGS.sqlVariableSyntaxOverrides);
@@ -1391,6 +1736,7 @@ function resetDefaultsForTab(tab: SettingsCategory) {
     editCompactColumnHeaderActions.value = DEFAULT_EDITOR_SETTINGS.compactColumnHeaderActions;
     editDataGridQuickEntry.value = DEFAULT_EDITOR_SETTINGS.dataGridQuickEntry;
     editDataGridFilterEditorView.value = DEFAULT_EDITOR_SETTINGS.dataGridFilterEditorView;
+    editDataGridKeepFilterEditorExpanded.value = DEFAULT_EDITOR_SETTINGS.dataGridKeepFilterEditorExpanded;
     editDataGridTextFilterPanelHeight.value = DEFAULT_EDITOR_SETTINGS.dataGridTextFilterPanelHeight;
     editMultiStatementDefaultView.value = DEFAULT_EDITOR_SETTINGS.multiStatementDefaultView;
     editDataGridAutoTransposeSingleRow.value = DEFAULT_EDITOR_SETTINGS.dataGridAutoTransposeSingleRow;
@@ -1477,6 +1823,7 @@ function resetAllDefaults() {
   editCompactColumnHeaderActions.value = DEFAULT_EDITOR_SETTINGS.compactColumnHeaderActions;
   editDataGridQuickEntry.value = DEFAULT_EDITOR_SETTINGS.dataGridQuickEntry;
   editDataGridFilterEditorView.value = DEFAULT_EDITOR_SETTINGS.dataGridFilterEditorView;
+  editDataGridKeepFilterEditorExpanded.value = DEFAULT_EDITOR_SETTINGS.dataGridKeepFilterEditorExpanded;
   editDataGridTextFilterPanelHeight.value = DEFAULT_EDITOR_SETTINGS.dataGridTextFilterPanelHeight;
   editMultiStatementDefaultView.value = DEFAULT_EDITOR_SETTINGS.multiStatementDefaultView;
   editDataGridAutoTransposeSingleRow.value = DEFAULT_EDITOR_SETTINGS.dataGridAutoTransposeSingleRow;
@@ -1487,6 +1834,7 @@ function resetAllDefaults() {
   editTableOpenPageSize.value = DEFAULT_EDITOR_SETTINGS.tableOpenPageSize;
   editQueryResultMaxRowsEnabled.value = DEFAULT_EDITOR_SETTINGS.queryResultMaxRowsEnabled;
   editQueryResultMaxRows.value = DEFAULT_EDITOR_SETTINGS.queryResultMaxRows;
+  editExternalSqlEditorMaxMb.value = DEFAULT_EDITOR_SETTINGS.externalSqlEditorMaxMb;
   editInfiniteScroll.value = DEFAULT_EDITOR_SETTINGS.infiniteScroll;
   editRegexMaxMatchCount.value = DEFAULT_EDITOR_SETTINGS.regexMaxMatchCount;
   editAutoCalculateTotalRows.value = DEFAULT_EDITOR_SETTINGS.autoCalculateTotalRows;
@@ -1685,7 +2033,10 @@ function onTableFontFamilyChange(v: any) {
 }
 
 function onUiFontFamilyChange(v: any) {
-  if (typeof v === "string") editUiFontFamily.value = v;
+  if (typeof v === "string") {
+    editUiFontFamily.value = v;
+    previewUiFontFamily(v);
+  }
 }
 
 const themeSelectValue = computed(() => {
@@ -1745,6 +2096,12 @@ function onDisconnectTabHandlingModeChange(v: any) {
 
 function onLocaleChange(v: any) {
   if (typeof v === "string") void setLocale(v as Locale);
+}
+
+function onUiScaleChange(value: unknown) {
+  const next = Number(value);
+  if (!Number.isFinite(next)) return;
+  editUiScale.value = next;
 }
 
 function onUpdateDownloadSourceChange(v: any) {
@@ -2107,6 +2464,54 @@ async function copyAppSupportInfo() {
   }
 }
 
+// --- Settings import / export (About page card) ---
+
+function buildSettingsExportPayload(): string {
+  return serializeSettingsTransfer(settingsStore.editorSettings, {
+    appVersion: props.appVersion || appSupportInfo.value?.appVersion || undefined,
+  });
+}
+
+// "Apply and export": reuse the regular apply flow so validation, persistence
+// and error toasts behave exactly like the footer Apply button. Returning null
+// aborts the export while keeping the draft editable.
+async function buildAppliedExportPayload(): Promise<string | null> {
+  // persistSettings() silently no-ops while a blocker (shortcut conflicts,
+  // invalid formatter config, row-limit conflict) is active — the footer Apply
+  // button is disabled in that state. Abort the export instead of writing a
+  // file that pretends the draft was applied.
+  if (hasApplyBlocker.value) {
+    toast(t("settings.settingsTransferApplyBlocked"), 5000);
+    return null;
+  }
+  if (!(await applySettingsForResult())) return null;
+  return buildSettingsExportPayload();
+}
+
+// Load validated imported values into the draft. Only the keys the file
+// actually contains are written: in-progress edits the file does not cover —
+// including state that a draft round-trip would drop, like a half-filled
+// table-column template row that has no field name yet — keep their exact
+// draft state. The base snapshot is untouched so everything stays unapplied
+// until the user clicks Apply (or discards via the close flow).
+function applyImportedEditorSettings(imported: Partial<EditorSettings>) {
+  const patch = editorSettingsDraftPatchFromSettings(imported);
+  applyEditorSettingsKeysToRefs(patch as EditorSettingsDraft, Object.keys(patch) as EditorSettingsDraftKey[]);
+  hasImportedSettingsPendingApply.value = true;
+}
+
+// Categories whose draft values differ from the saved base AND are covered by
+// the imported file — these draft changes will be replaced by the import.
+function getDraftConflictCategories(imported: Partial<EditorSettings>): SettingsTransferCategoryId[] {
+  const changedKeys = new Set(Object.keys(editorSettingsPatchFromDraft(currentEditorSettingsDraft(), editEditorSettingsBase.value)));
+  const conflicts = new Set<SettingsTransferCategoryId>();
+  for (const key of Object.keys(imported)) {
+    const category = transferCategoryForKey(key);
+    if (category && changedKeys.has(key)) conflicts.add(category);
+  }
+  return sortTransferCategories(conflicts);
+}
+
 function clearDebugLogs() {
   clearStoredDebugLogs();
   debugLogCopied.value = false;
@@ -2307,25 +2712,7 @@ function onMcpResourceScopeChange(scope: { allowedGroupIds: string[]; allowedCon
 
 type McpConnectionExecutionMode = "read_only" | "safe_write" | "high_risk_write";
 
-const mcpToolOptions = [
-  { name: "dbx_list_connections", labelKey: "settings.mcpToolListConnections" },
-  { name: "dbx_list_databases", labelKey: "settings.mcpToolListDatabases" },
-  { name: "dbx_list_tables", labelKey: "settings.mcpToolListTables" },
-  { name: "dbx_describe_table", labelKey: "settings.mcpToolDescribeTable" },
-  { name: "dbx_list_routines", labelKey: "settings.mcpToolListRoutines" },
-  { name: "dbx_get_routine_source", labelKey: "settings.mcpToolGetRoutineSource" },
-  { name: "dbx_get_schema_context", labelKey: "settings.mcpToolGetSchemaContext" },
-  { name: "dbx_execute_query", labelKey: "settings.mcpToolExecuteQuery" },
-  { name: "dbx_open_session", labelKey: "settings.mcpToolOpenSession" },
-  { name: "dbx_close_session", labelKey: "settings.mcpToolCloseSession" },
-  { name: "dbx_execute_redis_command", labelKey: "settings.mcpToolExecuteRedisCommand" },
-  { name: "dbx_send_message", labelKey: "settings.mcpToolSendMessage" },
-  { name: "dbx_add_connection", labelKey: "settings.mcpToolAddConnection" },
-  { name: "dbx_duplicate_connection", labelKey: "settings.mcpToolDuplicateConnection" },
-  { name: "dbx_remove_connection", labelKey: "settings.mcpToolRemoveConnection" },
-  { name: "dbx_open_table", labelKey: "settings.mcpToolOpenTable" },
-  { name: "dbx_execute_and_show", labelKey: "settings.mcpToolExecuteAndShow" },
-] as const;
+const mcpToolOptions = MCP_TOOL_OPTIONS;
 
 const mcpAllowedToolNames = computed(() => settingsStore.mcpGlobalPolicy.allowedToolNames);
 
@@ -2334,9 +2721,7 @@ function mcpToolAllowed(name: string): boolean {
 }
 
 function onMcpToolAllowedChange(name: string, allowed: boolean) {
-  const current = mcpAllowedToolNames.value ?? mcpToolOptions.map((tool) => tool.name);
-  const next = allowed ? [...new Set([...current, name])] : current.filter((tool) => tool !== name);
-  void saveMcpPolicy({ allowedToolNames: next });
+  void saveMcpPolicy({ allowedToolNames: toggleMcpAllowedToolName(mcpAllowedToolNames.value, name, allowed) });
 }
 
 const mcpConnectionPolicyConnections = computed(() => {
@@ -3150,7 +3535,7 @@ watch(
       mcpPolicyLoadError.value = "";
       aiConfigListMode.value = "list";
       aiEditConfigId.value = null;
-      activeSettingsTab.value = props.initialTab || "appearance";
+      activeSettingsTab.value = resolveSettingsCategory(props.initialTab);
       passwordMessage.value = "";
       oldPassword.value = "";
       newPassword.value = "";
@@ -3220,7 +3605,7 @@ watch(
   () => props.initialTab,
   (tab) => {
     if (!settingsVisible.value || !tab) return;
-    activeSettingsTab.value = tab;
+    activeSettingsTab.value = resolveSettingsCategory(tab);
     void scrollToInitialSettingsSection();
   },
 );
@@ -3229,7 +3614,7 @@ watch(
   () => props.navigationRequestId,
   () => {
     if (!settingsVisible.value || !props.initialTab) return;
-    activeSettingsTab.value = props.initialTab;
+    activeSettingsTab.value = resolveSettingsCategory(props.initialTab);
     void scrollToInitialSettingsSection();
   },
 );
@@ -3275,6 +3660,7 @@ watch(activeSettingsTab, async (tab) => {
     await promptTemplateStore.ensureLoaded();
     editGlobalInstructions.value = promptTemplateStore.globalInstructions;
   }
+  if (tab === "data" && isWeb) void loadWebSqlFileUploadMaxMbSetting();
   if (tab === "about" && !appSupportInfo.value) void refreshAppSupportInfo();
   if (tab === "appearance") {
     checkLayoutDescTruncation();
@@ -3307,9 +3693,13 @@ onMounted(() => {
   void refreshWebDavPasswordStatus();
   checkLayoutDescTruncation();
   initTruncationObservers();
+  void checkBackgroundImageFileExists();
 });
 
 onUnmounted(() => {
+  clearThemePalettePreview();
+  clearUiFontFamilyPreview();
+  restoreLocaleOptionPreview();
   cleanupTableColumnTemplatePointerDrag();
   cleanupTruncationObservers();
 });
@@ -3577,6 +3967,52 @@ function maxRetriesOutOfRange(value: number | undefined): boolean {
 function normalizeMaxRetries(value: number | undefined): number {
   const rounded = typeof value === "number" && Number.isFinite(value) ? Math.round(value) : 2;
   return Math.min(10, Math.max(0, rounded));
+}
+
+const editWebSqlFileUploadMaxMb = ref<number | undefined>(undefined);
+const webSqlFileUploadMaxMbSaving = ref(false);
+const webSqlFileUploadMaxMbLoaded = ref(false);
+const webSqlFileUploadMaxMbLoading = ref(false);
+const webSqlFileUploadMaxMbLoadError = ref("");
+
+async function loadWebSqlFileUploadMaxMbSetting() {
+  if (webSqlFileUploadMaxMbLoaded.value || webSqlFileUploadMaxMbLoading.value) return;
+  webSqlFileUploadMaxMbLoading.value = true;
+  webSqlFileUploadMaxMbLoadError.value = "";
+  try {
+    const bytes = await loadSqlFileUploadMaxBytes();
+    editWebSqlFileUploadMaxMb.value = Math.round(bytes / (1024 * 1024));
+    webSqlFileUploadMaxMbLoaded.value = true;
+  } catch (e: any) {
+    webSqlFileUploadMaxMbLoadError.value = e?.message || String(e);
+    toast(webSqlFileUploadMaxMbLoadError.value, 5000);
+  } finally {
+    webSqlFileUploadMaxMbLoading.value = false;
+  }
+}
+
+function normalizeWebSqlFileUploadMaxMb(value: number | undefined): number {
+  const rounded = typeof value === "number" && Number.isFinite(value) ? Math.round(value) : 200;
+  return Math.min(MAX_EXTERNAL_SQL_EDITOR_FILE_MB, Math.max(MIN_EXTERNAL_SQL_EDITOR_FILE_MB, rounded));
+}
+
+function webSqlFileUploadMaxMbOutOfRange(value: number | undefined): boolean {
+  return typeof value === "number" && (value < MIN_EXTERNAL_SQL_EDITOR_FILE_MB || value > MAX_EXTERNAL_SQL_EDITOR_FILE_MB);
+}
+
+async function saveWebSqlFileUploadMaxMbSetting() {
+  if (!webSqlFileUploadMaxMbLoaded.value) return;
+  const clamped = normalizeWebSqlFileUploadMaxMb(editWebSqlFileUploadMaxMb.value);
+  webSqlFileUploadMaxMbSaving.value = true;
+  try {
+    await saveSqlFileUploadMaxMb(clamped);
+    editWebSqlFileUploadMaxMb.value = clamped;
+    toast(t("settings.sqlFileUploadMaxMbSaved"));
+  } catch (e: any) {
+    toast(e?.message || String(e), 5000);
+  } finally {
+    webSqlFileUploadMaxMbSaving.value = false;
+  }
 }
 
 // AI Config Delete Confirmation
@@ -5160,6 +5596,34 @@ onUnmounted(() => {
                   </div>
                 </div>
               </div>
+
+              <Separator />
+
+              <div data-settings-search-id="editor-sql-file" :class="['space-y-3', settingsSearchTargetClass('editor-sql-file')]">
+                <div class="text-sm font-medium text-muted-foreground">
+                  {{ t("settings.sqlFileSection") }}
+                </div>
+                <div class="flex items-center justify-between gap-4 rounded-md border bg-muted/20 px-3 py-2">
+                  <div class="space-y-1">
+                    <Label for="external-sql-editor-max-mb">
+                      {{ t("settings.externalSqlEditorMaxMb") }}
+                    </Label>
+                    <p class="text-xs text-muted-foreground">
+                      {{ t("settings.externalSqlEditorMaxMbDescription", { min: MIN_EXTERNAL_SQL_EDITOR_FILE_MB, max: MAX_EXTERNAL_SQL_EDITOR_FILE_MB }) }}
+                    </p>
+                  </div>
+                  <Input
+                    id="external-sql-editor-max-mb"
+                    type="number"
+                    inputmode="numeric"
+                    class="h-7 w-[130px] px-2 text-left text-xs tabular-nums"
+                    :min="MIN_EXTERNAL_SQL_EDITOR_FILE_MB"
+                    :max="MAX_EXTERNAL_SQL_EDITOR_FILE_MB"
+                    :model-value="editExternalSqlEditorMaxMb"
+                    @input="updateExternalSqlEditorMaxMbInput"
+                  />
+                </div>
+              </div>
             </section>
 
             <section v-else-if="activeSettingsTab === 'formatter'" data-settings-search-id="formatter" :class="['flex flex-col gap-5 py-2', settingsSearchTargetClass('formatter')]">
@@ -5245,7 +5709,7 @@ onUnmounted(() => {
                   <div class="flex h-9 items-end">
                     <Label class="whitespace-normal leading-tight">{{ t("settings.languageTitle") }}</Label>
                   </div>
-                  <Select :model-value="currentLocale()" @update:model-value="onLocaleChange">
+                  <Select :model-value="currentLocale()" @update:model-value="onLocaleChange" @update:open="onLocaleOpenChange">
                     <SelectTrigger class="h-8 w-full gap-0.5 px-0.5">
                       <SelectValue>
                         <span v-if="selectedLocaleOption" class="flex min-w-0 items-center gap-0.5">
@@ -5256,8 +5720,8 @@ onUnmounted(() => {
                         </span>
                       </SelectValue>
                     </SelectTrigger>
-                    <SelectContent class="w-[150px]">
-                      <SelectItem v-for="locale in LOCALE_OPTIONS" :key="locale.value" :value="locale.value">
+                    <SelectContent class="w-[150px]" @pointerleave="restoreLocaleOptionPreview">
+                      <SelectItem v-for="locale in LOCALE_OPTIONS" :key="locale.value" :value="locale.value" @pointerenter="previewLocaleOption(locale.value)" @focus="previewLocaleOption(locale.value)">
                         <div class="flex items-center gap-1">
                           <span class="inline-flex h-5 w-6 shrink-0 items-center justify-center text-sm font-medium leading-none">
                             {{ locale.flag }}
@@ -5275,7 +5739,7 @@ onUnmounted(() => {
                   </div>
                   <div class="flex items-center gap-2">
                     <div class="min-w-0 flex-1">
-                      <Select :model-value="themePalette" @update:model-value="(value) => setThemePalette(value as AppThemePalette)">
+                      <Select :model-value="themePalette" @update:model-value="onThemePaletteSelect" @update:open="onThemePaletteOpenChange">
                         <SelectTrigger class="h-8 w-full gap-1">
                           <SelectValue :placeholder="t('settings.selectColorTheme')">
                             <span v-if="selectedThemePaletteOption" class="flex min-w-0 items-center gap-1">
@@ -5289,8 +5753,8 @@ onUnmounted(() => {
                             </span>
                           </SelectValue>
                         </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem v-for="option in appThemePaletteOptions" :key="option.value" :value="option.value">
+                        <SelectContent @pointerleave="clearThemePalettePreview">
+                          <SelectItem v-for="option in appThemePaletteOptions" :key="option.value" :value="option.value" @pointerenter="previewThemePalette(option.value)" @focus="previewThemePalette(option.value)">
                             <div class="flex items-center gap-2">
                               <span class="h-3 w-3 rounded-full border border-border shadow-xs" :style="{ background: option.previewColor }" />
                               {{ option.label }}
@@ -5314,15 +5778,7 @@ onUnmounted(() => {
                       </HelpTooltip>
                     </div>
                   </div>
-                  <Select
-                    :model-value="String(editUiScale)"
-                    @update:model-value="
-                      (value: any) => {
-                        const next = Number(value);
-                        if (Number.isFinite(next)) editUiScale = next;
-                      }
-                    "
-                  >
+                  <Select :model-value="String(editUiScale)" @update:model-value="onUiScaleChange">
                     <SelectTrigger class="h-8 w-full">
                       <SelectValue>{{ Math.round(editUiScale * 100) }}%</SelectValue>
                     </SelectTrigger>
@@ -5368,8 +5824,12 @@ onUnmounted(() => {
                     :trigger-class="appearanceFontSearchTriggerClass"
                     :trigger-icon-class="appearanceFontSearchTriggerIconClass"
                     content-class="w-[var(--reka-popover-trigger-width)] min-w-[260px]"
+                    :content-style="{ fontFamily: editUiFontFamily || DEFAULT_UI_FONT_FAMILY }"
                     @update:model-value="onUiFontFamilyChange"
-                    @update:open="(open: boolean) => open && loadSystemFontOptions()"
+                    @update:open="onUiFontFamilyOpenChange"
+                    @option-hover="previewUiFontOption"
+                    @option-highlight="previewUiFontOption"
+                    @option-leave="restoreUiFontFamilyPreview"
                   >
                     <template #trigger-label="{ label, loading }">
                       <span class="truncate" :style="{ fontFamily: editUiFontFamily }">
@@ -5666,6 +6126,55 @@ onUnmounted(() => {
                       </div>
                     </div>
                   </Button>
+                </div>
+              </div>
+
+              <div v-if="!isWeb" class="settings-appearance-group" data-background-image-settings>
+                <Label>{{ t("settings.backgroundImage") }}</Label>
+                <p class="text-xs text-muted-foreground">{{ t("settings.backgroundImageDescription") }}</p>
+                <div class="flex flex-wrap items-center gap-2">
+                  <Button type="button" variant="outline" size="sm" class="h-8" @click="pickBackgroundImage">
+                    {{ t("settings.backgroundImageChoose") }}
+                  </Button>
+                  <Button v-if="editBackgroundImage.filePath" type="button" variant="outline" size="sm" class="h-8" @click="clearBackgroundImageDraft">
+                    {{ t("settings.backgroundImageClear") }}
+                  </Button>
+                  <span v-if="editBackgroundImage.fileName" class="min-w-0 truncate text-xs text-muted-foreground" :title="editBackgroundImage.fileName">
+                    {{ editBackgroundImage.fileName }}
+                  </span>
+                  <span v-else class="text-xs text-muted-foreground">{{ t("settings.backgroundImageNone") }}</span>
+                </div>
+                <p v-if="backgroundImageFileMissing" class="text-xs text-destructive">
+                  {{ t("settings.backgroundImageMissing") }}
+                </p>
+                <div class="space-y-1">
+                  <Label for="background-image-display-mode">{{ t("settings.backgroundImageDisplayMode") }}</Label>
+                  <Select :model-value="editBackgroundImage.displayMode" @update:model-value="updateBackgroundImageDisplayMode">
+                    <SelectTrigger id="background-image-display-mode" class="h-8 w-48">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem v-for="mode in BACKGROUND_IMAGE_DISPLAY_MODES" :key="mode" :value="mode">
+                        {{ t(`settings.backgroundImageMode${mode.charAt(0).toUpperCase()}${mode.slice(1)}`) }}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div class="grid gap-3 sm:grid-cols-2">
+                  <div class="space-y-1">
+                    <div class="flex items-center justify-between gap-2">
+                      <Label for="background-image-transparency" class="text-xs text-muted-foreground">{{ t("settings.backgroundImageTransparency") }}</Label>
+                      <span class="text-xs text-muted-foreground">{{ backgroundImageTransparencyPercent }}%</span>
+                    </div>
+                    <input id="background-image-transparency" type="range" min="0" max="95" step="1" :value="backgroundImageTransparencyPercent" class="w-full accent-primary" @input="updateBackgroundImageTransparency(Number(($event.target as HTMLInputElement).value))" />
+                  </div>
+                  <div class="space-y-1">
+                    <div class="flex items-center justify-between gap-2">
+                      <Label for="background-image-blur" class="text-xs text-muted-foreground">{{ t("settings.backgroundImageBlur") }}</Label>
+                      <span class="text-xs text-muted-foreground">{{ editBackgroundImage.blur }}px</span>
+                    </div>
+                    <input id="background-image-blur" type="range" min="0" max="20" step="1" :value="editBackgroundImage.blur" class="w-full accent-primary" @input="updateBackgroundImageBlur(Number(($event.target as HTMLInputElement).value))" />
+                  </div>
                 </div>
               </div>
 
@@ -6173,6 +6682,13 @@ onUnmounted(() => {
                     >
                       <span class="truncate">{{ t("grid.filterTextView") }}</span>
                     </Button>
+                  </div>
+                  <div v-if="editDataGridFilterEditorView !== 'quick'" class="flex items-center justify-between gap-4 rounded-md border bg-background px-3 py-2">
+                    <div class="space-y-1">
+                      <Label for="data-grid-keep-filter-editor-expanded">{{ t("settings.dataGridKeepFilterEditorExpanded") }}</Label>
+                      <p class="text-xs text-muted-foreground">{{ t("settings.dataGridKeepFilterEditorExpandedDescription") }}</p>
+                    </div>
+                    <Switch id="data-grid-keep-filter-editor-expanded" v-model="editDataGridKeepFilterEditorExpanded" />
                   </div>
                 </div>
 
@@ -6682,6 +7198,40 @@ onUnmounted(() => {
                     </p>
                   </div>
                   <Switch id="query-export-keyset-enabled" v-model="editQueryExportKeysetOptimizationEnabled" class="mt-0.5" />
+                </div>
+              </div>
+
+              <Separator />
+
+              <div v-if="isWeb" data-settings-search-id="data-sql-file-upload" :class="['space-y-3', settingsSearchTargetClass('data-sql-file-upload')]">
+                <div class="text-sm font-medium text-muted-foreground">
+                  {{ t("settings.sqlFileSection") }}
+                </div>
+                <div class="flex items-center justify-between gap-4 rounded-md border bg-muted/20 px-3 py-2">
+                  <div class="space-y-1">
+                    <Label for="web-sql-file-upload-max-mb">
+                      {{ t("settings.webSqlFileUploadMaxMb") }}
+                    </Label>
+                    <p class="text-xs text-muted-foreground">
+                      {{ t("settings.webSqlFileUploadMaxMbDescription", { min: MIN_EXTERNAL_SQL_EDITOR_FILE_MB, max: MAX_EXTERNAL_SQL_EDITOR_FILE_MB }) }}
+                    </p>
+                  </div>
+                  <div class="flex shrink-0 items-center gap-2">
+                    <Input
+                      id="web-sql-file-upload-max-mb"
+                      v-model.number="editWebSqlFileUploadMaxMb"
+                      type="number"
+                      inputmode="numeric"
+                      class="h-7 w-[130px] px-2 text-left text-xs tabular-nums"
+                      :min="MIN_EXTERNAL_SQL_EDITOR_FILE_MB"
+                      :max="MAX_EXTERNAL_SQL_EDITOR_FILE_MB"
+                      :disabled="!webSqlFileUploadMaxMbLoaded || webSqlFileUploadMaxMbLoading"
+                      :aria-invalid="webSqlFileUploadMaxMbOutOfRange(editWebSqlFileUploadMaxMb)"
+                    />
+                    <Button type="button" size="sm" variant="outline" :disabled="!webSqlFileUploadMaxMbLoaded || webSqlFileUploadMaxMbSaving || webSqlFileUploadMaxMbOutOfRange(editWebSqlFileUploadMaxMb)" @click="saveWebSqlFileUploadMaxMbSetting">
+                      {{ t("settings.save") }}
+                    </Button>
+                  </div>
                 </div>
               </div>
 
@@ -7405,6 +7955,22 @@ LIMIT 100;</pre
                     </button>
                   </div>
                   <div class="flex-1"></div>
+                </div>
+              </div>
+
+              <!-- Restore last AI conversation (list mode, global) -->
+              <div v-if="aiConfigListMode === 'list'" class="space-y-3">
+                <Separator />
+                <div class="flex items-center justify-between gap-4 rounded-md border bg-muted/20 px-3 py-2">
+                  <div class="space-y-1">
+                    <Label for="ai-restore-last-conversation">
+                      {{ t("ai.restoreLastConversation") }}
+                    </Label>
+                    <p class="text-xs text-muted-foreground">
+                      {{ t("ai.restoreLastConversationDescription") }}
+                    </p>
+                  </div>
+                  <Switch id="ai-restore-last-conversation" :model-value="settingsStore.restoreLastConversation" @update:model-value="(value) => settingsStore.setRestoreLastConversation(Boolean(value))" />
                 </div>
               </div>
 
@@ -8639,6 +9205,14 @@ LIMIT 100;</pre
                   }}
                 </p>
               </div>
+
+              <SettingsTransferPanel
+                :has-unapplied-changes="hasChanges"
+                :build-saved-export-payload="buildSettingsExportPayload"
+                :build-applied-export-payload="buildAppliedExportPayload"
+                :apply-imported-settings="applyImportedEditorSettings"
+                :get-draft-conflict-categories="getDraftConflictCategories"
+              />
 
               <ChangelogPanel :checking-updates="props.checkingUpdates" @check-updates="emit('check-updates')" />
 

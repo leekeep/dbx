@@ -156,6 +156,7 @@ import { buildEditableObjectSource, buildRoutineRenameObjectSourceStatements, su
 import { loadEditableObjectSourceForEditor } from "@/lib/table/objectSourceLoad";
 import { buildViewDdl } from "@/lib/table/viewDdl";
 import { formatSqlForDisplay, sqlFormatDialectForDbType } from "@/lib/sql/sqlFormatter";
+import { omitDdlIdentifierQuotes } from "@/lib/sql/ddlDisplay";
 import { getTableStructureCapabilities } from "@/lib/table/tableStructureCapabilities";
 import { connectionObjectTreeNodeSchema, connectionObjectTreeQuerySchema, connectionUsesDatabaseObjectTreeMode, effectiveDatabaseTypeForConnection, tableStructureDatabaseTypeForConnection } from "@/lib/database/jdbcDialect";
 import { hasTreeNodeDatabaseContext } from "@/lib/sidebar/treeNodeContext";
@@ -1532,6 +1533,11 @@ function openMongoTreeData(node: TreeNode) {
     return;
   }
   if (node.type !== "mongo-collection") return;
+  const existing = queryStore.tabs.find((tab) => tab.mode === "mongo" && tab.connectionId === node.connectionId && tab.database === node.database && tab.tableMeta?.tableName === node.label);
+  if (existing) {
+    queryStore.switchTab(existing.id);
+    return;
+  }
   const tab = queryStore.createTab(node.connectionId, node.database, tabTitle, "mongo");
   queryStore.updateSql(tab, node.label);
   queryStore.setTableMeta(tab, {
@@ -2096,7 +2102,11 @@ async function openSidebarMultiTableDdlTab(targets: Array<TreeNode & { connectio
         source: result.source,
       });
     },
-    (ddl, target) => formatSqlForDisplay(ddl, sqlFormatDialectForDbType(databaseTypeForNode(target)), settingsStore.editorSettings.sqlFormatter),
+    async (ddl, target) => {
+      const formatDialect = sqlFormatDialectForDbType(databaseTypeForNode(target));
+      const formatted = await formatSqlForDisplay(ddl, formatDialect, settingsStore.editorSettings.sqlFormatter);
+      return settingsStore.editorSettings.generateSqlQuoteIdentifiers ? formatted : omitDdlIdentifierQuotes(formatted, formatDialect);
+    },
   );
   connectionStore.activeConnectionId = tabTarget.connectionId;
   const title = `DDL - ${targets.map((target) => target.label).join(", ")}`;
@@ -5308,6 +5318,9 @@ interface SidebarMenuFactoryContext {
   truncateMenuAction: (singleAction: () => void) => () => void;
   emptyMenuLabel: (singleLabel: string) => string;
   emptyMenuAction: (singleAction: () => void) => () => void;
+  batchAutoIncrementCount: number;
+  autoIncrementMenuLabel: (singleLabel: string) => string;
+  autoIncrementMenuAction: (singleAction: () => void) => () => void;
 }
 
 type SidebarMenuFactory = (context: SidebarMenuFactoryContext) => boolean;
@@ -5883,7 +5896,7 @@ function buildSpecialSidebarMenu(context: SidebarMenuFactoryContext): boolean {
 }
 
 function buildObjectSidebarMenu(context: SidebarMenuFactoryContext): boolean {
-  const { node, items, deleteMenuLabel, deleteMenuAction, truncateMenuLabel, truncateMenuAction, emptyMenuLabel, emptyMenuAction } = context;
+  const { node, items, deleteMenuLabel, deleteMenuAction, truncateMenuLabel, truncateMenuAction, emptyMenuLabel, emptyMenuAction, batchAutoIncrementCount, autoIncrementMenuLabel, autoIncrementMenuAction } = context;
   // 6. Table / View / Materialized View
   if (node.type === "table" || node.type === "view" || node.type === "materialized_view") {
     if (currentDatabaseType() === "victoriametrics" && node.type === "table") {
@@ -6334,6 +6347,9 @@ function treeItemMenuItems(): ContextMenuItem[] {
     truncateMenuAction,
     emptyMenuLabel,
     emptyMenuAction,
+    batchAutoIncrementCount,
+    autoIncrementMenuLabel,
+    autoIncrementMenuAction,
   };
   for (const factory of sidebarMenuFactories) {
     if (factory(factoryContext)) return items;
